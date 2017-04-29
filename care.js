@@ -34,11 +34,11 @@ var weatherBox = grid.set(0, 8, 2, 4, blessed.box, makeScrollBox(' 🌤 '));
 var todayBox = grid.set(0, 0, 6, 6, blessed.box, makeScrollBox(' 📝  Today '));
 var weekBox = grid.set(6, 0, 6, 6, blessed.box, makeScrollBox(' 📝  Week '));
 var commits = grid.set(0, 6, 6, 2, contrib.bar, makeGraphBox('Commits'));
-var parrotBox = grid.set(6, 6, 6, 6, blessed.box, makeScrollBox(''));
+var parrotBox = grid.set(6, 6, 6, 6, blessed.box, makeScrollBox(' 🤓 @' + (config.twitter[0] || '')));
 
 var tweetBoxes = {}
-tweetBoxes[config.twitter[1]] = grid.set(2, 8, 2, 4, blessed.box, makeBox(' 💖 '));
-tweetBoxes[config.twitter[2]] = grid.set(4, 8, 2, 4, blessed.box, makeBox(' 💬 '));
+tweetBoxes[config.twitter[1]] = grid.set(2, 8, 2, 4, blessed.box, makeBox(' 😂 @' + (config.twitter[1] || '')));
+tweetBoxes[config.twitter[2]] = grid.set(4, 8, 2, 4, blessed.box, makeBox(' 👨‍💻 @' + (config.twitter[2] || '')));
 
 tick();
 setInterval(tick, 1000 * 60 * config.updateInterval);
@@ -142,7 +142,7 @@ function makeBox(label) {
       type: 'line'  // or bg
     },
     style: {
-      fg: 'white',
+      fg: 'lightblack',
       border: { fg: 'cyan' },
       hover: { border: { fg: 'green' }, }
     }
