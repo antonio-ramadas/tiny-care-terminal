@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 var config = require(__dirname + '/config.js');
 var twitterbot = require(__dirname + '/twitterbot.js');
+var gitbot = require(__dirname + '/gitbot.js');
+var pomodoro = require(__dirname + '/pomodoro.js');
 
+var notifier = require('node-notifier');
 var spawn = require('child_process').spawn;
 var blessed = require('blessed');
 var contrib = require('blessed-contrib');
@@ -9,6 +12,8 @@ var chalk = require('chalk');
 var parrotSay = require('parrotsay-api');
 var bunnySay = require('sign-bunny');
 var weather = require('weather-js');
+
+var inPomodoroMode = false;
 
 var screen = blessed.screen(
     {fullUnicode: true, // emoji or bust
@@ -25,6 +30,53 @@ screen.key(['escape', 'q', 'C-c'], function(ch, key) {
 // Refresh on r, or Control-R.
 screen.key(['r', 'C-r'], function(ch, key) {
   tick();
+});
+
+screen.key(['s', 'C-s'], function(ch, key) {
+  if (!inPomodoroMode) {
+    return;
+  } else if (pomodoroObject.isStopped()) {
+    pomodoroObject.start();
+  } else if (pomodoroObject.isPaused()) {
+    pomodoroObject.resume();
+  } else {
+    pomodoroObject.pause();
+    pomodoroHandlers.onTick();
+  }
+});
+
+screen.key(['e', 'C-e'], function(ch, key) {
+  if (inPomodoroMode) {
+    pomodoroObject.stop();
+    pomodoroHandlers.onTick();
+  }
+});
+
+screen.key(['u', 'C-u'], function(ch, key) {
+  if (inPomodoroMode) {
+    pomodoroObject.updateRunningDuration();
+    pomodoroHandlers.onTick();
+  }
+});
+
+screen.key(['b', 'C-b'], function(ch, key) {
+  if (inPomodoroMode) {
+    pomodoroObject.updateBreakDuration();
+    pomodoroHandlers.onTick()
+  }
+});
+
+screen.key(['p', 'C-p'], function(ch, key) {
+  if (inPomodoroMode) {
+    pomodoroObject.stop();
+    inPomodoroMode = false;
+    doTheTweets();
+    parrotBox.removeLabel('');
+  } else {
+    parrotBox.setLabel(' 🍅 ');
+    inPomodoroMode = true;
+    pomodoroHandlers.onTick()
+  }
 });
 
 var grid = new contrib.grid({rows: 12, cols: 12, screen: screen});
@@ -76,6 +128,9 @@ function doTheTweets() {
   for (var which in config.twitter) {
     // Gigantor hack: first twitter account gets spoken by the party parrot.
     if (which == 0) {
+      if (inPomodoroMode) {
+        return;
+      }
       twitterbot.getTweet(config.twitter[which]).then(function(tweet) {
         if (config.say === 'bunny') {
           parrotBox.content = bunnySay(tweet.text);
@@ -116,21 +171,57 @@ function doTheCodes() {
   var todayCommits = 0;
   var weekCommits = 0;
 
-  var today = spawn('sh ' + __dirname + '/standup-helper.sh', ['-m ' + config.depth, config.repos], {shell:true});
-  todayBox.content = '';
-  today.stdout.on('data', data => {
-    todayCommits = getCommits(`${data}`, todayBox);
-    updateCommitsGraph(todayCommits, weekCommits);
-    screen.render();
-  });
+  function getCommits(data, box) {
+    var content = colorizeLog(data || '');
+    box.content += content;
+    var commitRegex = /(.......) (- .*)/g;
+    return (box && box.content) ? (box.content.match(commitRegex) || []).length : '0';
+  }
 
-  var week = spawn('sh ' + __dirname + '/standup-helper.sh', ['-m ' + config.depth + ' -d 7', config.repos], {shell:true});
-  weekBox.content = '';
-  week.stdout.on('data', data => {
-    weekCommits = getCommits(`${data}`, weekBox);
-    updateCommitsGraph(todayCommits, weekCommits);
-    screen.render();
-  });
+  if (config.gitbot.toLowerCase() === 'gitstandup') {
+    var today = spawn('sh ' + __dirname + '/standup-helper.sh', ['-m ' + config.depth, config.repos], {shell:true});
+    todayBox.content = '';
+    today.stdout.on('data', data => {
+      todayCommits = getCommits(`${data}`, todayBox);
+      updateCommitsGraph(todayCommits, weekCommits);
+      screen.render();
+    });
+
+    var week = spawn('sh ' + __dirname + '/standup-helper.sh', ['-m ' + config.depth + ' -d 7', config.repos], {shell:true});
+    weekBox.content = '';
+    week.stdout.on('data', data => {
+      weekCommits = getCommits(`${data}`, weekBox);
+      updateCommitsGraph(todayCommits, weekCommits);
+      screen.render();
+    });
+  } else {
+    gitbot.findGitRepos(config.repos, config.depth-1, (err, allRepos) => {
+      if (err) {
+        return todayBox.content = err;
+        screen.render();
+      }
+      gitbot.getCommitsFromRepos(allRepos, 1, (err, data) => {
+        if (err) {
+          return todayBox.content = err;
+          screen.render();
+        }
+        todayBox.content = '';
+        todayCommits = getCommits(`${data}`, todayBox);
+        updateCommitsGraph(todayCommits, weekCommits);
+        screen.render();
+      });
+      gitbot.getCommitsFromRepos(allRepos, 7, (err, data) => {
+        if (err) {
+          return weekBox.content = err;
+          screen.render();
+        }
+        weekBox.content = '';
+        weekCommits = getCommits(`${data}`, weekBox);
+        updateCommitsGraph(todayCommits, weekCommits);
+        screen.render();
+      });
+    });
+  }
 }
 
 function makeBox(label) {
@@ -167,13 +258,6 @@ function makeGraphBox(label) {
   options.xOffset= 4;
   options.maxHeight= 10;
   return options;
-}
-
-var commitRegex = /(.......) (- .*)/g;
-function getCommits(data, box) {
-  var content = colorizeLog(data);
-  box.content += content;
-  return (box.content.match(commitRegex) || []).length;
 }
 
 function updateCommitsGraph(today, week) {
@@ -238,3 +322,53 @@ function catSay(text) {
    　　　　　 ∪`
     ;
 }
+
+
+var pomodoroHandlers = {
+  onTick: function() {
+    if (!inPomodoroMode) return;
+    var remainingTime = pomodoroObject.getRemainingTime();
+
+    var statusText = '';
+    if (pomodoroObject.isInBreak()) {
+      statusText = ' (Break Started) ';
+    } else if (pomodoroObject.isStopped()) {
+      statusText = ' (Press "s" to start) ';
+    } else if (pomodoroObject.isPaused()) {
+      statusText = ' (Press "s" to resume) ';
+    }
+
+    var content = `In Pomodoro Mode: ${remainingTime} ${statusText}`;
+    var metaData = `Duration: ${pomodoroObject.getRunningDuration()} Minutes,  Break Time: ${pomodoroObject.getBreakDuration()} Minutes\n`;
+    metaData += 'commands: \n s - start/pause/resume \n e - stop \n u - update duration \n b - update break time';
+
+    parrotSay(content).then(function(text) {
+      parrotBox.content = text + metaData;
+      screen.render();
+    });
+  },
+
+  onBreakStarts: function() {
+    if (inPomodoroMode) {
+      notifier.notify({
+        title: 'Pomodoro Alert',
+        message: 'Break Time!',
+        sound: true,
+        timeout: 30,
+      });
+    }
+  },
+
+  onBreakEnds: function() {
+    if (inPomodoroMode) {
+      notifier.notify({
+        title: 'Pomodoro Alert',
+        message: 'Break Time Ends!',
+        sound: true,
+        timeout: 30,
+      });
+    }
+  },
+}
+
+var pomodoroObject = pomodoro(pomodoroHandlers);
